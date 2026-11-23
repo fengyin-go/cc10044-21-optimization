@@ -12,6 +12,8 @@ from app.services.table_archive import TableArchiveService
 from app.services.agg_builder import AggBuilderService
 from app.services.pipeline_monitor import PipelineMonitorService
 from app.services.cold_restore import ColdRestoreService
+from app.services.archive_file_catalog import ArchiveFileCatalogService
+from app.services.daily_report_recon import DailyReportReconService
 from app.services.dimension_builder import DimensionBuilderService
 from app.services.data_retention import DataRetentionService
 from app.services.transform_plan import TransformPlanService
@@ -34,6 +36,8 @@ SERVICES: dict[str, BaseModuleService] = {
     "agg_builder": AggBuilderService(),
     "pipeline_monitor": PipelineMonitorService(),
     "cold_restore": ColdRestoreService(),
+    "archive_file_catalog": ArchiveFileCatalogService(),
+    "daily_report_recon": DailyReportReconService(),
     "dimension_builder": DimensionBuilderService(),
     "data_retention": DataRetentionService(),
     "transform_plan": TransformPlanService(),

@@ -1,12 +1,13 @@
 """数据血缘领域服务：管理表级和字段级的数据血缘图、上下游追踪和断裂检测。
 
-数据链路位置：元数据层，维护数据从源到目标的完整血缘关系图。"""
+数据链路位置：元数据层，维护数据从源到目标的完整血缘关系图；
+同时承担日报取数接口：按冷数据恢复的可读分区清单回答哪些日期能取数。"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from app.services.base import BaseModuleService
+from app.services.base import BaseModuleService, parse_date_range
 from app.store import store
 
 
@@ -19,6 +20,106 @@ class LineageGraphService(BaseModuleService):
     STATUS_ORDER = ["已建立", "待验证", "已断裂"]
     ACTION_RULES = {"刷新血缘": "已建立", "标记断裂": "已断裂"}
     NEGATIVE_ACTIONS = []
+
+    # 副本内容：日报从通过验真的副本地址实际能读到的明细行。
+    # 真实项目里这里是对副本存储的读取，当前用内置样例代替。
+    REPLICA_DETAILS: dict[tuple[str, str], list[dict[str, Any]]] = {
+        ("ods_orders", "2026-11-05"): [
+            {"订单号": "SO20261105001", "买家": "杭州·王女士", "金额": 128.50},
+            {"订单号": "SO20261105002", "买家": "上海·李先生", "金额": 256.00},
+            {"订单号": "SO20261105003", "买家": "北京·赵先生", "金额": 64.00},
+        ],
+        ("ods_orders", "2026-11-06"): [
+            {"订单号": "SO20261106001", "买家": "深圳·陈女士", "金额": 99.90},
+            {"订单号": "SO20261106002", "买家": "广州·周先生", "金额": 300.10},
+        ],
+    }
+
+    def readable_partitions(self, table: str, start: str, end: str) -> dict[str, Any]:
+        """可读分区清单：按恢复单验真结果回答每个日分区能否取数。
+
+        供日报取数前调用，区分当日没有文件（缺片/无归档条目）、
+        文件摘要异常和已经校验通过的日期：通过的日期返回副本地址和
+        校验凭据，其余说明无法取数的原因。
+        """
+        dates = parse_date_range(f"{start}~{end}")
+        table = (table or "").strip()
+        if not table or not dates:
+            return {"ok": False, "message": "表名或日期范围无法解析"}
+        restores = [
+            r for r in store.rows("cold_restore")
+            if r.get("数据表") == table and r.get("分区清单")
+        ]
+        items: list[dict[str, Any]] = []
+        for date in dates:
+            covering: list[tuple[int, dict[str, Any]]] = []
+            for restore in restores:
+                for row in restore["分区清单"]:
+                    if row.get("日期") == date:
+                        covering.append((int(restore.get("id", 0)), row))
+            if not covering:
+                items.append({
+                    "日期": date,
+                    "状态": "未验真",
+                    "可取数": False,
+                    "原因": "没有覆盖该日期的恢复单验真记录",
+                })
+                continue
+            restore_id, row = max(covering, key=lambda item: item[0])
+            if row.get("状态") == "校验通过":
+                items.append({
+                    "日期": date,
+                    "状态": "校验通过",
+                    "可取数": True,
+                    "副本地址": row.get("副本地址", ""),
+                    "校验凭据": row.get("校验凭据"),
+                    "恢复单号": restore_id,
+                })
+            else:
+                items.append({
+                    "日期": date,
+                    "状态": row.get("状态"),
+                    "可取数": False,
+                    "原因": row.get("不可读原因", ""),
+                    "恢复单号": restore_id,
+                })
+        readable = [i for i in items if i["可取数"]]
+        return {
+            "ok": True,
+            "数据表": table,
+            "范围": f"{dates[0]}~{dates[-1]}",
+            "清单": items,
+            "可读日期数": len(readable),
+            "不可读日期数": len(items) - len(readable),
+        }
+
+    def daily_report_read(self, table: str, date: str) -> dict[str, Any]:
+        """日报取数：从通过验真的副本地址读取当日明细。
+
+        缺失或验不过的分区一律不可取数，返回原因；通过验真的分区
+        返回副本地址、校验凭据和当日明细行。
+        """
+        manifest = self.readable_partitions(table, date, date)
+        if not manifest.get("ok"):
+            return {"可取数": False, "数据表": table, "日期": date,
+                    "原因": manifest.get("message", "查询失败")}
+        item = manifest["清单"][0]
+        if not item["可取数"]:
+            return {"可取数": False, "数据表": table, "日期": date,
+                    "状态": item["状态"], "原因": item["原因"]}
+        details = [dict(row) for row in self.REPLICA_DETAILS.get((table, date), [])]
+        subtotal = round(sum(float(row["金额"]) for row in details), 2)
+        return {
+            "可取数": True,
+            "数据表": table,
+            "日期": date,
+            "副本地址": item["副本地址"],
+            "校验凭据": item["校验凭据"],
+            "恢复单号": item["恢复单号"],
+            "明细": details,
+            "行数": len(details),
+            "金额小计": subtotal,
+        }
 
     def trace_upstream(self, target_table: str, max_depth: int = 5) -> dict[str, Any]:
         """从目标表向上追溯所有上游来源表和转换链路。

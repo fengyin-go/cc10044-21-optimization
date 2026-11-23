@@ -29,3 +29,15 @@ class EntryPayload(BaseModel):
 class ActionPayload(BaseModel):
     action: str
     remark: str | None = None
+
+
+class SupplementPayload(BaseModel):
+    """补登副本：按确切表名+分区日期登记实物摘要。"""
+    table: str
+    date: str
+    digest: str
+
+
+class ConfirmDatePayload(BaseModel):
+    """对账单单独确认一个日期。"""
+    date: str

@@ -1,9 +1,35 @@
 """模块服务基类：共享查询、登记、动作和统计骨架，业务差异留在各模块文件。"""
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from app.store import store
+
+
+def parse_date_range(text: str, max_days: int = 62) -> list[str]:
+    """把「YYYY-MM-DD~YYYY-MM-DD」或单日「YYYY-MM-DD」解析成有序日期列表（含端点）。"""
+    text = (text or "").strip()
+    if not text:
+        return []
+    if "~" in text:
+        start_s, end_s = text.split("~", 1)
+    else:
+        start_s = end_s = text
+    try:
+        start = datetime.strptime(start_s.strip(), "%Y-%m-%d")
+        end = datetime.strptime(end_s.strip(), "%Y-%m-%d")
+    except ValueError:
+        return []
+    if end < start:
+        start, end = end, start
+    days = min((end - start).days, max_days - 1)
+    return [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days + 1)]
+
+
+def now_stamp() -> str:
+    """操作留痕时间：验真、确认、补登都用它记录「何时」。"""
+    return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
 class BaseModuleService:
